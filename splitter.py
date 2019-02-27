@@ -1,13 +1,11 @@
 import openpyxl
-from openpyxl.utils import get_column_letter, column_index_from_string
 
+import argparse
 import logging
 import re
 
 logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
-
-PAYROLL_PERIOD="Feb 2019"
+logger.setLevel(logging.INFO)
 
 INSTRUCTOR_NAME_REGEX = re.compile("^(.*) Class\/Enrollments.*$")
 
@@ -15,9 +13,6 @@ INSTRUCTOR_NAME_REGEX = re.compile("^(.*) Class\/Enrollments.*$")
 def row_is_blank(row):
     """Returns true iff the row is blank"""
     for cell in row:
-        print(cell)
-        print(cell.data_type)
-
         # Skip merged cells, which do not have a value.
         try:
             if cell.value is not None:
@@ -28,10 +23,46 @@ def row_is_blank(row):
     # We have iterated over all cells in the row and none had a value.
     return True
 
+def copy_row(dest_sheet, row):
+    """Deep copies the cell values into a new row in the dest sheet
+
+    openpyxl has an API limit that prevents direct copying of the cell
+    objects from one workbook to another.
+
+    """
+    new_row = []
+    for cell in row:
+        # Skip merged cells, which do not have a value.
+        try:
+            new_row.append(cell.value)
+        except AttributeError:
+            # Insert empty cells if the cells were originally merged
+            new_row.append(None)
+
+    dest_sheet.append(new_row)
+
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+    description='Split an xlsx mindbody payroll report into individual payroll reports.')
+
+    parser.add_argument('source_file',
+                        metavar='source_file',
+                        type=str,
+                        help="a source mindbody payroll xlsx file")
+
+    parser.add_argument('-p', '--pay_period',
+                        type=str,
+                        help="The pay period string to append to each created filename")
+
+    args = parser.parse_args()
+
+    if args.pay_period is None:
+        logging.critical('pay_period is a required parameter, try --pay_period "date"')
+        exit(1)
+
     # Load the excel sheet file into python
-    source_workbook = openpyxl.load_workbook('./test.xlsx')
+    source_workbook = openpyxl.load_workbook(args.source_file)
 
     # Access the first sheet in the xlsx file.
     #
@@ -57,7 +88,7 @@ if __name__ == "__main__":
             logging.info("beginning a new split on row %d", row_number)
             # When we find a blank row, begin a new split.
             if dest_workbook is not None and current_name is not None:
-                filename = current_name + " - " + PAYROLL_PERIOD + ".xlsx"
+                filename = current_name + " - " + args.pay_period + ".xlsx"
                 dest_workbook.save(filename)
 
             dest_workbook = openpyxl.Workbook()
@@ -71,15 +102,14 @@ if __name__ == "__main__":
                 # The python regex api is tricky, be sure to consult
                 # the documentation before changing this line.
                 current_name = INSTRUCTOR_NAME_REGEX.match(current_name).group(1)
+                logging.info("section instructor is %s", current_name)
             else:
                 logging.warning(
-                    "section has malformed name [%s] and will not be recorded",
+                    "section has malformed name '%s' and will not be recorded",
                     current_name)
                 current_name = None
 
             logging.debug("new split name: %s", current_name)
         else:
             # When the row is not blank, just copy over!
-            dest_sheet.append((row_number,))
-            # TODO(matt9j) Implement the actual copy!!!
-
+            copy_row(dest_sheet, row)
